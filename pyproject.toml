@@ -1,0 +1,30 @@
+[project]
+name = "powerbi-mcp-server"
+version = "0.1.0"
+description = "Power BI MCP server for querying semantic models via DAX"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp",
+    "httpx",
+    "msal",
+    "pydantic-settings",
+    "loguru",
+    "python-dotenv",
+]
+
+[tool.uv]
+package = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=0.24.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+pythonpath = ["."]
+markers = ["integration: requires real Power BI credentials"]
