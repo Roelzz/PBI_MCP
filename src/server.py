@@ -64,8 +64,13 @@ def _apply_user_assertion() -> None:
         from fastmcp.server.dependencies import get_access_token
 
         token = get_access_token()
+        if token:
+            logger.info("OBO: user assertion set (token present)")
+        else:
+            logger.warning("OBO: no access token in request context, falling back to client credentials")
         set_user_assertion(token.token if token else None)
     except RuntimeError:
+        logger.warning("OBO: failed to get access token, falling back to client credentials")
         set_user_assertion(None)
 
 

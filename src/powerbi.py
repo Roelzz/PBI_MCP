@@ -304,9 +304,10 @@ class PowerBIClient:
             raise RuntimeError("getDefinition timed out after polling.")
 
         if resp.status_code == 403:
+            logger.error("Fabric getDefinition 403 response: {}", resp.text[:500])
             raise RuntimeError(
                 f"Access denied for semantic model '{dataset_id}'. "
-                "Ensure the service principal has Build permissions and 'Service principals can call Fabric public APIs' is enabled."
+                f"Fabric API response: {resp.text[:300]}"
             )
         if resp.status_code == 404:
             raise RuntimeError(f"Semantic model '{dataset_id}' not found in workspace '{workspace_id}'.")
