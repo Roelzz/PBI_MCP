@@ -6,7 +6,7 @@ from loguru import logger
 
 from .config import settings
 
-POWER_BI_SCOPE = "https://analysis.windows.net/powerbi/api/.default"
+POWER_BI_SCOPE = "https://api.fabric.microsoft.com/.default"
 
 _user_assertion: ContextVar[str | None] = ContextVar("_user_assertion", default=None)
 

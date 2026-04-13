@@ -521,7 +521,7 @@ async def test_obo_token_acquisition() -> None:
     assert token == "obo-token"
     mock_app.acquire_token_on_behalf_of.assert_called_once_with(
         user_assertion="user-jwt",
-        scopes=["https://analysis.windows.net/powerbi/api/.default"],
+        scopes=["https://api.fabric.microsoft.com/.default"],
     )
     set_user_assertion(None)  # cleanup
 
