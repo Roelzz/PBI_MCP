@@ -77,14 +77,30 @@ list_workspaces → list_datasets(workspace_id) → get_semantic_model_schema(da
 
 ## Authentication
 
-The server uses **certificate-based authentication** — no client secrets. A PFX certificate is used by MSAL to authenticate the service principal to Azure AD. Two auth modes control how the MCP endpoint itself is protected:
+The server needs to prove its identity to Azure AD every time it requests a Power BI token. This is true for **both** auth modes — without a valid credential, Azure AD won't issue any tokens and the server can't access Power BI at all.
 
-### Why certificates instead of client secrets?
+### How certificate authentication works
 
-- **Can't be copy-pasted** — a certificate file is harder to accidentally leak than a string
-- **No secrets in `.env`** — only a file path, not a credential value
-- **Stronger cryptography** — RSA key pair vs a shared secret string
-- **The certificate must be uploaded to the app registration** so Azure AD can validate the signature when the server requests a token
+A certificate is a cryptographic key pair: a **private key** (secret, stays on your server) and a **public key** (shared with Azure AD).
+
+```mermaid
+graph LR
+    A["<b>Your Server</b><br>has cert.pfx<br>(private key)"] -->|"1. Signs request<br>with private key"| B["<b>Azure AD</b><br>has cert.pem<br>(public key)"]
+    B -->|"2. Verifies signature<br>with public key"| C{"Signature<br>valid?"}
+    C -->|Yes| D["Issues Power BI<br>access token"]
+    C -->|No| E["Rejects request"]
+```
+
+**What goes where:**
+
+| File | Location | Purpose |
+|---|---|---|
+| `cert.pfx` | Your server (local file) | Contains the private key. MSAL uses it to sign authentication requests. **Never share this.** |
+| `cert.pem` | Uploaded to Azure AD app registration | Contains the public key. Azure AD uses it to verify that requests really came from your server. |
+
+**Why not a client secret?** A client secret is just a password string that sits in your `.env` file — it can be copy-pasted, leaked in logs, or accidentally committed. A certificate private key is a binary file that's much harder to accidentally expose, and `.env` only contains the file path.
+
+**Why upload the public key to Azure AD?** Azure AD needs to verify your server's identity. When your server signs a request with the private key, Azure AD checks the signature against the public key on file. If they match, it knows the request is legitimate.
 
 ### Auth Modes
 
