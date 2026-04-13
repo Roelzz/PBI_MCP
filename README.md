@@ -198,17 +198,20 @@ Requires the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azu
 4. Under **API Permissions**, add **Power BI Service**:
    - Application: `Dataset.Read.All` (required), `Workspace.Read.All`, `Report.Read.All` (optional)
    - Delegated: `Dataset.Read.All` (required for OBO)
+   - Delegated: `Fabric.Read.All` (required for OBO — the `getDefinition` API is a Fabric endpoint)
 5. **Grant admin consent**
-6. Under **Expose an API**:
+6. In **Power BI Admin Portal** → Tenant settings → Developer settings:
+   - Enable **"Service principals can call Fabric public APIs"**
+7. Under **Expose an API**:
    - Set Application ID URI to `api://<your-client-id>`
    - Add scope `access_as_user` (type: User)
-7. In the app **Manifest**, set `requestedAccessTokenVersion: 2`
-8. In **Power BI Admin Portal** → Tenant settings → Developer settings:
-   Enable "Allow service principals to use Power BI APIs"
-9. In your **Power BI workspace** → Settings → Access:
+8. In the app **Manifest**, set `requestedAccessTokenVersion: 2`
+9. In **Power BI Admin Portal** → Tenant settings → Developer settings:
+   Enable **"Allow service principals to use Power BI APIs"**
+10. In your **Power BI workspace** → Settings → Access:
    Add the service principal as a **Member**
 
-> Steps 6-7 are only needed for `AUTH_MODE=obo`. For `AUTH_MODE=none`, only application permissions and workspace membership are required.
+> Steps 4 (delegated), 6-8 are only needed for `AUTH_MODE=obo`. For `AUTH_MODE=none`, only application permissions, Fabric API access, and workspace membership are required.
 
 ## Configuration
 
