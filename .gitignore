@@ -11,6 +11,11 @@ wheels/
 
 # Environment
 .env
+
+# Certificates
+*.pfx
+*.pem
+*.key
 .pytest_cache/
 .coverage
 htmlcov/

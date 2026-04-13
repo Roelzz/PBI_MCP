@@ -1,17 +1,24 @@
 #!/bin/bash
 
 # Azure App Registration Setup Script for Power BI MCP Server
-# Creates an App Registration with Power BI API permissions and writes credentials to .env
+# Creates an App Registration with certificate auth, Power BI permissions,
+# and optional OBO (On-Behalf-Of) configuration.
 
 set -e
 
 # --- Configuration ---
 POWERBI_RESOURCE_APP_ID="00000009-0000-0000-c000-000000000000"
-PERM_DATASET_READ_ALL="7f33e027-4039-419b-938e-2f8ca153e68e"
+# Application permissions (Role)
+PERM_DATASET_READ_ALL_APP="7f33e027-4039-419b-938e-2f8ca153e68e"
+PERM_WORKSPACE_READ_ALL_APP="b2f1b2fa-f35c-407c-979c-a858a808ba85"
+PERM_REPORT_READ_ALL_APP="4ae1bf56-f562-4747-b7bc-2fa0874ed46f"
+# Delegated permissions (Scope) — same names, different GUIDs
+PERM_DATASET_READ_ALL_DEL="322b68b2-0804-416e-86a5-d772c567f6be"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/.env"
 ENV_EXAMPLE="$SCRIPT_DIR/.env.example"
+CERT_DIR="$SCRIPT_DIR"
 
 # --- Functions ---
 command_exists() {
@@ -34,6 +41,11 @@ if ! command_exists az; then
     echo "Azure CLI ('az') is not installed. Install it first:"
     echo "  brew install azure-cli (macOS)"
     echo "  curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash (Linux)"
+    exit 1
+fi
+
+if ! command_exists openssl; then
+    echo "OpenSSL is not installed. Install it first."
     exit 1
 fi
 
@@ -60,6 +72,7 @@ APP_NAME=${APP_NAME:-PowerBI-MCP-Server}
 # --- Create App Registration ---
 echo "Creating App Registration '$APP_NAME'..."
 APP_ID=$(az ad app create --display-name "$APP_NAME" --query "appId" -o tsv)
+OBJECT_ID=$(az ad app show --id "$APP_ID" --query "id" -o tsv)
 echo "App created. Client ID: $APP_ID"
 
 # --- Create Service Principal ---
@@ -67,15 +80,42 @@ echo "Creating Service Principal..."
 SP_ID=$(az ad sp create --id "$APP_ID" --query "id" -o tsv)
 echo "Service Principal created."
 
-# --- Create Client Secret ---
-echo "Generating Client Secret (1 year expiry)..."
-CLIENT_SECRET=$(az ad app credential reset --id "$APP_ID" --append --display-name "MCP Server Secret" --years 1 --query "password" -o tsv)
-echo "Client Secret generated."
+# --- Generate Certificate ---
+echo "Generating self-signed certificate (1 year)..."
+openssl req -x509 -newkey rsa:2048 \
+    -keyout "$CERT_DIR/private.key" \
+    -out "$CERT_DIR/cert.pem" \
+    -days 365 -nodes \
+    -subj "/CN=$APP_NAME" 2>/dev/null
 
-# --- Add Power BI Permission ---
-echo "Adding Dataset.Read.All permission..."
-az ad app permission add --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" --api-permissions "$PERM_DATASET_READ_ALL=Role" >/dev/null
+openssl pkcs12 -export \
+    -out "$CERT_DIR/cert.pfx" \
+    -inkey "$CERT_DIR/private.key" \
+    -in "$CERT_DIR/cert.pem" \
+    -passout pass: 2>/dev/null
 
+echo "Uploading certificate to App Registration..."
+az ad app credential reset --id "$APP_ID" --cert @"$CERT_DIR/cert.pem" --append >/dev/null
+rm -f "$CERT_DIR/private.key"
+echo "Certificate created: cert.pfx (keep this secure)"
+
+# --- Add Application Permissions (for client credentials fallback) ---
+echo ""
+echo "Adding application permissions..."
+az ad app permission add --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" --api-permissions "$PERM_DATASET_READ_ALL_APP=Role" >/dev/null
+echo "  Dataset.Read.All (Application)"
+az ad app permission add --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" --api-permissions "$PERM_WORKSPACE_READ_ALL_APP=Role" >/dev/null
+echo "  Workspace.Read.All (Application)"
+az ad app permission add --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" --api-permissions "$PERM_REPORT_READ_ALL_APP=Role" >/dev/null
+echo "  Report.Read.All (Application)"
+
+# --- Add Delegated Permission (for OBO) ---
+echo "Adding delegated permissions (for OBO)..."
+az ad app permission add --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" --api-permissions "$PERM_DATASET_READ_ALL_DEL=Scope" >/dev/null
+echo "  Dataset.Read.All (Delegated)"
+
+# --- Grant Admin Consent ---
+echo ""
 echo "Attempting to grant Admin Consent..."
 if az ad app permission admin-consent --id "$APP_ID" 2>/dev/null; then
     echo "Admin Consent granted."
@@ -85,6 +125,17 @@ else
     echo "  Go to: Azure Portal > App Registrations > $APP_NAME > API Permissions"
     echo "  Click 'Grant admin consent for [Your Org]'"
 fi
+
+# --- Expose API Scope (for OBO) ---
+echo ""
+echo "Configuring OBO: exposing API scope..."
+az ad app update --id "$APP_ID" --identifier-uris "api://$APP_ID" >/dev/null
+
+SCOPE_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
+az rest --method PATCH \
+    --uri "https://graph.microsoft.com/v1.0/applications/$OBJECT_ID" \
+    --body "{\"api\":{\"requestedAccessTokenVersion\":2,\"oauth2PermissionScopes\":[{\"id\":\"$SCOPE_ID\",\"adminConsentDescription\":\"Access Power BI MCP server on behalf of user\",\"adminConsentDisplayName\":\"Access as user\",\"isEnabled\":true,\"type\":\"User\",\"value\":\"access_as_user\"}]}}" >/dev/null
+echo "Exposed scope: api://$APP_ID/access_as_user"
 
 # --- Write .env ---
 echo ""
@@ -101,7 +152,8 @@ fi
 
 update_env_value "TENANT_ID" "$TENANT_ID" "$ENV_FILE"
 update_env_value "CLIENT_ID" "$APP_ID" "$ENV_FILE"
-update_env_value "CLIENT_SECRET" "$CLIENT_SECRET" "$ENV_FILE"
+update_env_value "CLIENT_CERT_PATH" "$CERT_DIR/cert.pfx" "$ENV_FILE"
+update_env_value "AUTH_MODE" "none" "$ENV_FILE"
 echo ".env updated with credentials."
 
 # --- Summary ---
@@ -110,8 +162,20 @@ echo "Setup complete!"
 echo "======================================="
 echo "TENANT_ID=$TENANT_ID"
 echo "CLIENT_ID=$APP_ID"
-echo "CLIENT_SECRET=****${CLIENT_SECRET: -4}"
+echo "CLIENT_CERT_PATH=$CERT_DIR/cert.pfx"
+echo "API Scope: api://$APP_ID/access_as_user"
 echo "======================================="
+echo ""
+echo "AUTH MODES:"
+echo ""
+echo "  AUTH_MODE=none (default):"
+echo "    Uses certificate credentials to access Power BI."
+echo "    No authentication on the MCP endpoint."
+echo ""
+echo "  AUTH_MODE=obo:"
+echo "    Requires Azure AD bearer token on every MCP request."
+echo "    Exchanges user token for Power BI token via OBO flow."
+echo "    Set MCP_BASE_URL to the server's public URL."
 echo ""
 echo "MANUAL STEPS REQUIRED:"
 echo ""
@@ -123,7 +187,6 @@ echo ""
 echo "2. Power BI Workspace:"
 echo "   Open your workspace > Settings > Access"
 echo "   Add '$APP_NAME' as a Member (or Contributor)."
-echo "   This grants Build permission on datasets in that workspace."
 echo ""
 echo "3. Test the server:"
 echo "   uv run python main.py"
