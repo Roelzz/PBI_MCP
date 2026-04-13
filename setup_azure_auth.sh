@@ -8,6 +8,8 @@ set -e
 # --- Configuration ---
 POWERBI_RESOURCE_APP_ID="00000009-0000-0000-c000-000000000000"
 PERM_DATASET_READ_ALL="7f33e027-4039-419b-938e-2f8ca153e68e"
+PERM_WORKSPACE_READ_ALL="b2f1b2fa-f35c-407c-979c-a858a808ba85"
+PERM_REPORT_READ_ALL="4ae1bf56-f562-4747-b7bc-2fa0874ed46f"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/.env"
@@ -72,9 +74,15 @@ echo "Generating Client Secret (1 year expiry)..."
 CLIENT_SECRET=$(az ad app credential reset --id "$APP_ID" --append --display-name "MCP Server Secret" --years 1 --query "password" -o tsv)
 echo "Client Secret generated."
 
-# --- Add Power BI Permission ---
-echo "Adding Dataset.Read.All permission..."
+# --- Add Power BI Permissions ---
+echo "Adding Dataset.Read.All permission (required)..."
 az ad app permission add --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" --api-permissions "$PERM_DATASET_READ_ALL=Role" >/dev/null
+
+echo "Adding Workspace.Read.All permission (optional, for cross-workspace discovery)..."
+az ad app permission add --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" --api-permissions "$PERM_WORKSPACE_READ_ALL=Role" >/dev/null
+
+echo "Adding Report.Read.All permission (optional, for cross-workspace report access)..."
+az ad app permission add --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" --api-permissions "$PERM_REPORT_READ_ALL=Role" >/dev/null
 
 echo "Attempting to grant Admin Consent..."
 if az ad app permission admin-consent --id "$APP_ID" 2>/dev/null; then
