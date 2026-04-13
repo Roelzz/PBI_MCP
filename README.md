@@ -360,27 +360,78 @@ Caddy automatically provisions and renews Let's Encrypt certificates.
 
 ## Copilot Studio Connection
 
+### Prerequisites (Azure AD app registration)
+
+Before connecting Copilot Studio, your app registration needs additional configuration beyond the basic setup:
+
+1. **Redirect URIs** — add these under **Authentication → Web → Redirect URIs**:
+   ```
+   https://token.botframework.com/.auth/web/redirect
+   ```
+   > A second redirect URI is needed for your specific connector. On the first sign-in attempt, Azure AD will show an error like `AADSTS50011` with the exact URI — add that one too. It looks like: `https://global.consent.azure-apim.net/redirect/<your-connector-name>`
+
+2. **Client secret for Copilot Studio** — Copilot Studio needs its own credential to exchange auth codes with Azure AD. This is separate from the MCP server's certificate:
+   ```bash
+   az ad app credential reset --id <your-client-id> \
+     --append --display-name "Copilot Studio" --years 1 \
+     --query password -o tsv
+   ```
+   Save the output — you'll paste it into Copilot Studio.
+
+3. **Verify these are already set** (from the Azure AD Setup section):
+   - Identifier URI: `api://<your-client-id>`
+   - Exposed scope: `access_as_user`
+   - `requestedAccessTokenVersion: 2` in the app manifest
+   - Delegated permission: Power BI `Dataset.Read.All`
+   - Admin consent granted
+
 ### Connecting your agent
 
-1. In Copilot Studio, go to **Tools → Add Tool → New Tool → MCP**
-2. Enter your server's HTTPS URL: `https://your-domain.com/mcp`
-3. **Generative Orchestration** must be enabled on your agent
-4. Copilot Studio auto-discovers all tools from the server
+1. In Copilot Studio, ensure **Generative Orchestration** is enabled on your agent
+2. Go to **Tools → Add Tool → New Tool → MCP**
+3. Enter your server's HTTPS URL: `https://<your-domain>/mcp`
+4. Select **OAuth 2.0** → **Manual**
+5. Fill in the OAuth configuration:
+
+| Field | Value |
+|---|---|
+| **Client ID** | `<your-client-id>` |
+| **Client Secret** | the secret from the prerequisite step above |
+| **Authorization URL** | `https://login.microsoftonline.com/<your-tenant-id>/oauth2/v2.0/authorize` |
+| **Token URL** | `https://login.microsoftonline.com/<your-tenant-id>/oauth2/v2.0/token` |
+| **Refresh URL** | same as Token URL |
+| **Scope** | `api://<your-client-id>/access_as_user` |
+
+6. Click **Create**
+7. Sign in when prompted — Azure AD will authenticate you and consent to the scope
+8. Copilot Studio auto-discovers all tools from the server
 
 > **Important:** Copilot Studio requires **Streamable HTTP** transport. SSE transport is deprecated.
 
-### Configuring OBO authentication
+### How it works
 
-For user-scoped Power BI access via OBO:
+```mermaid
+sequenceDiagram
+    participant User
+    participant CopilotStudio as Copilot Studio
+    participant AzureAD as Azure AD
+    participant MCP as MCP Server
+    participant PBI as Power BI API
 
-1. In Copilot Studio, configure OAuth on the MCP connection:
-   - **Client ID**: your app registration's client ID
-   - **Tenant ID**: your Azure AD tenant ID
-   - **Authorization URL**: `https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/authorize`
-   - **Token URL**: `https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token`
-   - **Scope**: `api://<client-id>/access_as_user`
-2. Copilot Studio acquires a token for each user session and sends it in the `Authorization` header
-3. The MCP server validates the token and exchanges it for a Power BI token scoped to that user
+    User->>CopilotStudio: Ask a question about data
+    CopilotStudio->>AzureAD: OAuth flow (client secret + user login)
+    AzureAD-->>CopilotStudio: Azure AD token (scope: access_as_user)
+    CopilotStudio->>MCP: Tool call + Authorization: Bearer <token>
+    MCP->>AzureAD: Validate token (JWKS)
+    MCP->>AzureAD: OBO exchange (certificate + user token)
+    AzureAD-->>MCP: Power BI token (scoped to user)
+    MCP->>PBI: API call with user's Power BI token
+    PBI-->>MCP: Data (respects user's RLS permissions)
+    MCP-->>CopilotStudio: Results
+    CopilotStudio-->>User: Answer based on their data
+```
+
+**Key point:** The client secret in Copilot Studio is only used by Copilot Studio to talk to Azure AD. The MCP server never sees it — it authenticates to Azure AD using its own PFX certificate. Two separate credentials, two separate purposes.
 
 ## MCP Client Configuration
 
