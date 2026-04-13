@@ -1,4 +1,5 @@
 import base64
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -469,3 +470,127 @@ async def test_mcp_tool_list_reports_error() -> None:
         result = await list_reports("bad-ws")
 
     assert result["error"] == "forbidden"
+
+
+# --- Auth: credential selection tests ---
+
+
+def test_credential_selection_cert(tmp_path) -> None:
+    """CLIENT_CERT_PATH set returns certificate dict."""
+    pfx = tmp_path / "cert.pfx"
+    pfx.touch()
+    with patch.dict(os.environ, {
+        "TENANT_ID": "t", "CLIENT_ID": "c",
+        "CLIENT_CERT_PATH": str(pfx), "CLIENT_CERT_PASSPHRASE": "secret",
+        "CLIENT_SECRET": "should-be-ignored",
+    }):
+        from src.config import Settings
+        s = Settings()
+        cred = s.client_credential
+        assert isinstance(cred, dict)
+        assert cred["private_key_pfx_path"] == str(pfx)
+        assert cred["passphrase"] == "secret"
+
+
+def test_credential_selection_secret() -> None:
+    """CLIENT_SECRET used when no cert path."""
+    with patch.dict(os.environ, {
+        "TENANT_ID": "t", "CLIENT_ID": "c",
+        "CLIENT_SECRET": "my-secret", "CLIENT_CERT_PATH": "",
+    }):
+        from src.config import Settings
+        s = Settings()
+        assert s.client_credential == "my-secret"
+
+
+def test_credential_selection_none() -> None:
+    """Raises ValueError when neither cert nor secret is set."""
+    with patch.dict(os.environ, {
+        "TENANT_ID": "t", "CLIENT_ID": "c",
+        "CLIENT_SECRET": "", "CLIENT_CERT_PATH": "",
+    }):
+        from src.config import Settings
+        s = Settings()
+        with pytest.raises(ValueError, match="CLIENT_CERT_PATH or CLIENT_SECRET"):
+            _ = s.client_credential
+
+
+# --- Auth: OBO token manager tests ---
+
+
+async def test_obo_token_acquisition() -> None:
+    """OBO flow called when user assertion is set."""
+    from src.auth import PowerBITokenManager, set_user_assertion
+
+    tm = PowerBITokenManager()
+    mock_app = MagicMock()
+    mock_app.acquire_token_on_behalf_of.return_value = {"access_token": "obo-token"}
+    tm._app = mock_app
+
+    set_user_assertion("user-jwt")
+    token = await tm.get_token()
+
+    assert token == "obo-token"
+    mock_app.acquire_token_on_behalf_of.assert_called_once_with(
+        user_assertion="user-jwt",
+        scopes=["https://analysis.windows.net/powerbi/api/.default"],
+    )
+    set_user_assertion(None)  # cleanup
+
+
+async def test_client_credentials_fallback() -> None:
+    """Client credentials used when no user assertion."""
+    from src.auth import PowerBITokenManager, set_user_assertion
+
+    tm = PowerBITokenManager()
+    mock_app = MagicMock()
+    mock_app.acquire_token_for_client.return_value = {"access_token": "cc-token"}
+    tm._app = mock_app
+
+    set_user_assertion(None)
+    token = await tm.get_token()
+
+    assert token == "cc-token"
+    mock_app.acquire_token_for_client.assert_called_once()
+    mock_app.acquire_token_on_behalf_of.assert_not_called()
+
+
+async def test_obo_token_failure() -> None:
+    """OBO failure raises RuntimeError with details."""
+    from src.auth import PowerBITokenManager, set_user_assertion
+
+    tm = PowerBITokenManager()
+    mock_app = MagicMock()
+    mock_app.acquire_token_on_behalf_of.return_value = {
+        "error": "invalid_grant",
+        "error_description": "token expired",
+    }
+    tm._app = mock_app
+
+    set_user_assertion("expired-jwt")
+    with pytest.raises(RuntimeError, match="OBO token exchange failed.*token expired"):
+        await tm.get_token()
+    set_user_assertion(None)
+
+
+# --- Auth: auth provider creation ---
+
+
+def test_auth_provider_none_mode() -> None:
+    """No auth provider when AUTH_MODE=none."""
+    with patch("src.server.settings") as mock_settings:
+        from src.config import AuthMode
+        mock_settings.AUTH_MODE = AuthMode.NONE
+        from src.server import _create_auth
+        assert _create_auth() is None
+
+
+def test_auth_provider_obo_requires_base_url() -> None:
+    """OBO mode raises ValueError without MCP_BASE_URL."""
+    with patch("src.server.settings") as mock_settings:
+        from src.config import AuthMode
+        mock_settings.AUTH_MODE = AuthMode.OBO
+        mock_settings.MCP_BASE_URL = ""
+        from src.server import _create_auth
+        with pytest.raises(ValueError, match="MCP_BASE_URL is required"):
+            _create_auth()

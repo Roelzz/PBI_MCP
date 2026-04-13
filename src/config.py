@@ -34,11 +34,24 @@ class TransportType(str, Enum):
     HTTP = "http"
 
 
+class AuthMode(str, Enum):
+    NONE = "none"
+    OBO = "obo"
+
+
 class Settings(BaseSettings):
     # Azure AD (Service Principal)
     TENANT_ID: str = ""
     CLIENT_ID: str = ""
     CLIENT_SECRET: str = ""
+
+    # Certificate auth (preferred over client secret)
+    CLIENT_CERT_PATH: str = ""
+    CLIENT_CERT_PASSPHRASE: str = ""
+
+    # Auth mode: "none" (client credentials) or "obo" (Azure AD JWT + OBO)
+    AUTH_MODE: AuthMode = AuthMode.NONE
+    MCP_BASE_URL: str = ""
 
     # MCP Server
     MCP_TRANSPORT: TransportType = TransportType.HTTP
@@ -46,6 +59,20 @@ class Settings(BaseSettings):
 
     # Application
     LOG_LEVEL: str = "INFO"
+
+    @property
+    def client_credential(self) -> str | dict[str, str]:
+        """Return MSAL client credential: certificate dict or secret string."""
+        if self.CLIENT_CERT_PATH:
+            cred: dict[str, str] = {"private_key_pfx_path": self.CLIENT_CERT_PATH}
+            if self.CLIENT_CERT_PASSPHRASE:
+                cred["passphrase"] = self.CLIENT_CERT_PASSPHRASE
+            return cred
+        if self.CLIENT_SECRET:
+            return self.CLIENT_SECRET
+        raise ValueError(
+            "Either CLIENT_CERT_PATH or CLIENT_SECRET must be set."
+        )
 
     model_config = SettingsConfigDict(
         env_file=_find_env_file(),

@@ -127,6 +127,59 @@ Requires the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azu
 
 > **Note:** If the service principal is a workspace Member, all tools work with just `Dataset.Read.All`. The optional permissions extend access to workspaces where the SP is not explicitly a Member.
 
+## Authentication
+
+The server supports two authentication modes, controlled by `AUTH_MODE` in `.env`:
+
+### `AUTH_MODE=none` (default)
+
+No authentication on the MCP endpoint. The server uses the service principal's own credentials (certificate or client secret) to access Power BI. Suitable for local development and trusted networks.
+
+### `AUTH_MODE=obo` (recommended for production)
+
+The MCP endpoint requires a valid Azure AD bearer token. The server validates the token using Azure AD's JWKS endpoint, then exchanges it for a Power BI token via the On-Behalf-Of (OBO) flow. This means:
+
+- Every MCP request must include an `Authorization: Bearer <token>` header
+- Power BI access is scoped to the calling user (respects Row-Level Security)
+- The service principal still needs a credential (certificate or secret) for the OBO exchange
+
+Required settings for OBO mode:
+```
+AUTH_MODE=obo
+MCP_BASE_URL=https://your-mcp-server.example.com
+```
+
+### Certificate vs Client Secret
+
+The server supports both. Certificate is preferred (harder to leak, can't be copy-pasted):
+
+| Setting | Description |
+|---|---|
+| `CLIENT_CERT_PATH` | Path to PFX certificate file (preferred) |
+| `CLIENT_CERT_PASSPHRASE` | Optional PFX passphrase |
+| `CLIENT_SECRET` | Client secret string (fallback) |
+
+If both are set, the certificate is used.
+
+### Testing OBO locally
+
+Get a token for the MCP server's API scope using the Azure CLI:
+
+```bash
+# Login as yourself
+az login
+
+# Get a token for the MCP server's API scope
+TOKEN=$(az account get-access-token \
+  --resource api://<your-client-id> \
+  --query accessToken -o tsv)
+
+# Test the MCP endpoint
+curl -H "Authorization: Bearer $TOKEN" http://localhost:2009/mcp
+```
+
+> **Note:** The `az account get-access-token --resource` command requires the app registration to have `requestedAccessTokenVersion: 2` in its manifest and the `access_as_user` scope exposed. The setup script configures this automatically.
+
 ## Configuration
 
 All settings via environment variables (`.env`):
@@ -135,7 +188,11 @@ All settings via environment variables (`.env`):
 |---|---|---|
 | `TENANT_ID` | — | Azure AD tenant ID |
 | `CLIENT_ID` | — | Azure AD app (client) ID |
-| `CLIENT_SECRET` | — | Azure AD client secret |
+| `CLIENT_SECRET` | — | Azure AD client secret (fallback) |
+| `CLIENT_CERT_PATH` | — | Path to PFX certificate (preferred) |
+| `CLIENT_CERT_PASSPHRASE` | — | PFX passphrase (optional) |
+| `AUTH_MODE` | `none` | Auth mode: `none` or `obo` |
+| `MCP_BASE_URL` | — | Server public URL (required for OBO) |
 | `MCP_TRANSPORT` | `http` | Transport type: `http` or `stdio` |
 | `MCP_PORT` | `2009` | Server port (HTTP/SSE mode) |
 | `LOG_LEVEL` | `INFO` | Log level |
@@ -159,6 +216,8 @@ Add to your Claude Desktop MCP config (`claude_desktop_config.json`):
 ### Copilot Studio
 
 Use the SSE endpoint URL `http://<host>:2009/sse` as the MCP server connection in Copilot Studio's generative actions configuration.
+
+For OBO mode, configure the Copilot Studio connector to acquire a token with audience `api://<client-id>` and scope `api://<client-id>/access_as_user`.
 
 ## Testing
 
