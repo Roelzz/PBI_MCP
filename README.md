@@ -103,29 +103,30 @@ Server starts on `http://0.0.0.0:2009` with HTTP/SSE transport.
 
 ### Automated (recommended)
 
-The included script creates an app registration, service principal, client secret, and configures permissions:
+The included script creates an app registration, service principal, certificate, client secret (fallback), and configures permissions including OBO:
 
 ```bash
 ./setup_azure_auth.sh
 ```
 
-Requires the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli). The script writes credentials directly to `.env`.
+Requires the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) and `openssl`. The script writes credentials directly to `.env` and generates `cert.pfx` in the project root.
 
 ### Manual
 
 1. Register an app in **Azure AD (Entra ID)**
-2. Create a **client secret**
-3. Under API Permissions, add **Power BI Service** (Application):
-   - `Dataset.Read.All` (required)
-   - `Workspace.Read.All` (optional — only for org-wide workspace discovery)
-   - `Report.Read.All` (optional — only for org-wide report access)
+2. Generate a self-signed certificate and upload the public key to the app registration (or create a client secret as fallback)
+3. Under API Permissions, add **Power BI Service**:
+   - Application: `Dataset.Read.All` (required), `Workspace.Read.All`, `Report.Read.All` (optional)
+   - Delegated: `Dataset.Read.All` (required for OBO)
 4. **Grant admin consent**
-5. In **Power BI Admin Portal** → Tenant settings → Developer settings:
+5. Under **Expose an API**, add scope `access_as_user` (required for OBO)
+6. In the app manifest, set `requestedAccessTokenVersion: 2`
+7. In **Power BI Admin Portal** → Tenant settings → Developer settings:
    Enable "Allow service principals to use Power BI APIs"
-6. In your **Power BI workspace** → Settings → Access:
+8. In your **Power BI workspace** → Settings → Access:
    Add the service principal as a **Member**
 
-> **Note:** If the service principal is a workspace Member, all tools work with just `Dataset.Read.All`. The optional permissions extend access to workspaces where the SP is not explicitly a Member.
+> **Note:** Steps 5-6 are only needed for OBO mode (`AUTH_MODE=obo`). For `AUTH_MODE=none`, only the application permissions and workspace membership are required.
 
 ## Authentication
 
