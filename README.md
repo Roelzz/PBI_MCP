@@ -198,7 +198,7 @@ Requires the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azu
 4. Under **API Permissions**, add **Power BI Service**:
    - Application: `Dataset.Read.All` (required), `Workspace.Read.All`, `Report.Read.All` (optional)
    - Delegated: `Dataset.Read.All` (required for OBO)
-   - Delegated: `Fabric.Read.All` (required for OBO — the `getDefinition` API is a Fabric endpoint)
+   - Delegated: `SemanticModel.ReadWrite.All` (required for OBO — the Fabric `getDefinition` API is classified as a write operation even though it only reads schema data)
 5. **Grant admin consent**
 6. In **Power BI Admin Portal** → Tenant settings → Developer settings:
    - Enable **"Service principals can call Fabric public APIs"**
