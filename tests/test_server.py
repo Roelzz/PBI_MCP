@@ -499,7 +499,7 @@ def test_credential_selection_no_cert() -> None:
     }):
         from src.config import Settings
         s = Settings()
-        with pytest.raises(ValueError, match="CLIENT_CERT_PATH must be set"):
+        with pytest.raises(ValueError, match="CLIENT_CERT_PATH or CLIENT_CERT_BASE64 must be set"):
             _ = s.client_credential
 
 

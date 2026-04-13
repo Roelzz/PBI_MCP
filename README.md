@@ -218,7 +218,8 @@ All settings via environment variables (`.env`):
 |---|---|---|
 | `TENANT_ID` | — | Azure AD tenant ID |
 | `CLIENT_ID` | — | Azure AD app (client) ID |
-| `CLIENT_CERT_PATH` | — | Path to PFX certificate file (required, use absolute path) |
+| `CLIENT_CERT_PATH` | — | Path to PFX certificate file (use absolute path) |
+| `CLIENT_CERT_BASE64` | — | Base64-encoded PFX (alternative to path, for containers) |
 | `CLIENT_CERT_PASSPHRASE` | — | PFX passphrase (optional) |
 | `AUTH_MODE` | `none` | Auth mode: `none` or `obo` |
 | `MCP_BASE_URL` | — | Server public URL (required for `obo`) |
@@ -325,18 +326,25 @@ Coolify auto-detects Python/UV projects via `pyproject.toml` and `uv.lock`:
 1. Create a new service in Coolify, point to your Git repository
 2. Coolify/Nixpacks runs `uv sync --no-dev --frozen` automatically
 3. Set the start command: `uv run python main.py`
-4. Configure environment variables in Coolify's UI:
+4. Base64-encode your certificate (run this locally):
+   ```bash
+   base64 -i cert.pfx | tr -d '\n'
+   ```
+5. Configure environment variables in Coolify's UI:
    ```
    TENANT_ID=<your-tenant-id>
    CLIENT_ID=<your-client-id>
-   CLIENT_CERT_PATH=/app/cert.pfx
+   CLIENT_CERT_BASE64=<paste base64 string from step 4>
+   CLIENT_CERT_PASSPHRASE=
    AUTH_MODE=obo
    MCP_BASE_URL=https://your-domain.com
    MCP_TRANSPORT=http
    MCP_PORT=2009
+   LOG_LEVEL=INFO
    ```
-5. Mount `cert.pfx` into the container (add as a persistent file or base64-encode in an env var and decode at startup)
+   > Use `CLIENT_CERT_BASE64` instead of `CLIENT_CERT_PATH` — the server decodes it to a temp file at startup. No file mounting needed.
 6. Assign your domain in Coolify — Traefik handles TLS termination and Let's Encrypt certificates automatically
+7. Set the exposed port to `2009` in Coolify's network settings
 
 ### Alternative: Caddy as reverse proxy
 
