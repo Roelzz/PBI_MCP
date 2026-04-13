@@ -208,7 +208,7 @@ async def test_error_401(powerbi_client: PowerBIClient) -> None:
     mock_resp.status_code = 401
 
     mock_client = AsyncMock()
-    mock_client.post.return_value = mock_resp
+    mock_client.request.return_value = mock_resp
     mock_client.is_closed = False
     powerbi_client._client = mock_client
 
@@ -223,7 +223,7 @@ async def test_error_403(powerbi_client: PowerBIClient) -> None:
     mock_resp.status_code = 403
 
     mock_client = AsyncMock()
-    mock_client.post.return_value = mock_resp
+    mock_client.request.return_value = mock_resp
     mock_client.is_closed = False
     powerbi_client._client = mock_client
 
@@ -238,7 +238,7 @@ async def test_error_404(powerbi_client: PowerBIClient) -> None:
     mock_resp.status_code = 404
 
     mock_client = AsyncMock()
-    mock_client.post.return_value = mock_resp
+    mock_client.request.return_value = mock_resp
     mock_client.is_closed = False
     powerbi_client._client = mock_client
 
@@ -255,7 +255,7 @@ async def test_error_400(powerbi_client: PowerBIClient) -> None:
     mock_resp.text = "Bad Request"
 
     mock_client = AsyncMock()
-    mock_client.post.return_value = mock_resp
+    mock_client.request.return_value = mock_resp
     mock_client.is_closed = False
     powerbi_client._client = mock_client
 
@@ -282,3 +282,190 @@ async def test_mcp_tool_execute_error() -> None:
         result = await execute_dax_query("bad-id", "INVALID")
 
     assert result["error"] == "query failed"
+
+
+# --- 429 Retry Tests ---
+
+
+async def test_retry_on_429(powerbi_client: PowerBIClient) -> None:
+    """429 response triggers retry and succeeds on second attempt."""
+    resp_429 = MagicMock()
+    resp_429.status_code = 429
+    resp_429.headers = {"Retry-After": "0"}
+
+    resp_200 = MagicMock()
+    resp_200.status_code = 200
+    resp_200.json.return_value = {"value": []}
+
+    mock_client = AsyncMock()
+    mock_client.request.side_effect = [resp_429, resp_200]
+    mock_client.is_closed = False
+    powerbi_client._client = mock_client
+
+    with patch("src.powerbi.token_manager.get_token", return_value="fake-token"):
+        with patch("src.powerbi.asyncio.sleep", new_callable=AsyncMock):
+            resp = await powerbi_client._request("GET", "https://example.com/test")
+
+    assert resp.status_code == 200
+    assert mock_client.request.call_count == 2
+
+
+async def test_retry_on_429_exhausted(powerbi_client: PowerBIClient) -> None:
+    """429 retries exhausted returns the 429 response."""
+    resp_429 = MagicMock()
+    resp_429.status_code = 429
+    resp_429.headers = {"Retry-After": "0"}
+
+    mock_client = AsyncMock()
+    mock_client.request.return_value = resp_429
+    mock_client.is_closed = False
+    powerbi_client._client = mock_client
+
+    with patch("src.powerbi.token_manager.get_token", return_value="fake-token"):
+        with patch("src.powerbi.asyncio.sleep", new_callable=AsyncMock):
+            resp = await powerbi_client._request("GET", "https://example.com/test")
+
+    assert resp.status_code == 429
+    assert mock_client.request.call_count == 4  # initial + 3 retries
+
+
+# --- list_workspaces Tests ---
+
+
+async def test_list_workspaces(powerbi_client: PowerBIClient) -> None:
+    """List workspaces returns structured workspace data."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "value": [
+            {"id": "ws-1", "name": "Sales Workspace", "type": "Workspace", "state": "Active"},
+            {"id": "ws-2", "name": "Marketing", "type": "Workspace", "state": "Active"},
+        ]
+    }
+
+    with patch.object(powerbi_client, "_request", return_value=mock_resp):
+        result = await powerbi_client.list_workspaces()
+
+    assert result["count"] == 2
+    assert result["workspaces"][0]["id"] == "ws-1"
+    assert result["workspaces"][0]["name"] == "Sales Workspace"
+    assert result["workspaces"][1]["id"] == "ws-2"
+
+
+async def test_list_workspaces_empty(powerbi_client: PowerBIClient) -> None:
+    """List workspaces with no accessible workspaces."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"value": []}
+
+    with patch.object(powerbi_client, "_request", return_value=mock_resp):
+        result = await powerbi_client.list_workspaces()
+
+    assert result["count"] == 0
+    assert result["workspaces"] == []
+
+
+async def test_mcp_tool_list_workspaces_error() -> None:
+    """MCP tool returns error dict on failure."""
+    from src.server import list_workspaces
+
+    with patch("src.server.powerbi_client.list_workspaces", side_effect=RuntimeError("auth failed")):
+        result = await list_workspaces()
+
+    assert result["error"] == "auth failed"
+
+
+# --- list_datasets Tests ---
+
+
+async def test_list_datasets(powerbi_client: PowerBIClient) -> None:
+    """List datasets returns structured dataset data."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "value": [
+            {"id": "ds-1", "name": "Sales Model", "configuredBy": "user@test.com", "isRefreshable": True},
+            {"id": "ds-2", "name": "HR Model", "configuredBy": "admin@test.com", "isRefreshable": False},
+        ]
+    }
+
+    with patch.object(powerbi_client, "_request", return_value=mock_resp):
+        result = await powerbi_client.list_datasets("ws-1")
+
+    assert result["workspace_id"] == "ws-1"
+    assert result["count"] == 2
+    assert result["datasets"][0]["id"] == "ds-1"
+    assert result["datasets"][0]["configured_by"] == "user@test.com"
+    assert result["datasets"][1]["is_refreshable"] is False
+
+
+async def test_list_datasets_empty(powerbi_client: PowerBIClient) -> None:
+    """List datasets for workspace with no datasets."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"value": []}
+
+    with patch.object(powerbi_client, "_request", return_value=mock_resp):
+        result = await powerbi_client.list_datasets("ws-1")
+
+    assert result["count"] == 0
+    assert result["datasets"] == []
+
+
+async def test_mcp_tool_list_datasets_error() -> None:
+    """MCP tool returns error dict on failure."""
+    from src.server import list_datasets
+
+    with patch("src.server.powerbi_client.list_datasets", side_effect=RuntimeError("not found")):
+        result = await list_datasets("bad-ws")
+
+    assert result["error"] == "not found"
+
+
+# --- list_reports Tests ---
+
+
+async def test_list_reports(powerbi_client: PowerBIClient) -> None:
+    """List reports returns structured report data."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "value": [
+            {
+                "id": "rpt-1", "name": "Sales Report", "datasetId": "ds-1",
+                "reportType": "PowerBIReport", "webUrl": "https://app.powerbi.com/reports/rpt-1",
+            },
+        ]
+    }
+
+    with patch.object(powerbi_client, "_request", return_value=mock_resp):
+        result = await powerbi_client.list_reports("ws-1")
+
+    assert result["workspace_id"] == "ws-1"
+    assert result["count"] == 1
+    assert result["reports"][0]["id"] == "rpt-1"
+    assert result["reports"][0]["dataset_id"] == "ds-1"
+    assert result["reports"][0]["report_type"] == "PowerBIReport"
+
+
+async def test_list_reports_empty(powerbi_client: PowerBIClient) -> None:
+    """List reports for workspace with no reports."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"value": []}
+
+    with patch.object(powerbi_client, "_request", return_value=mock_resp):
+        result = await powerbi_client.list_reports("ws-1")
+
+    assert result["count"] == 0
+    assert result["reports"] == []
+
+
+async def test_mcp_tool_list_reports_error() -> None:
+    """MCP tool returns error dict on failure."""
+    from src.server import list_reports
+
+    with patch("src.server.powerbi_client.list_reports", side_effect=RuntimeError("forbidden")):
+        result = await list_reports("bad-ws")
+
+    assert result["error"] == "forbidden"

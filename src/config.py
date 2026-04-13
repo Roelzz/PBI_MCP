@@ -1,8 +1,25 @@
 import os
+import subprocess
 from enum import Enum
+from pathlib import Path
 
 from loguru import logger
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _find_env_file() -> str:
+    """Resolve .env from the main git working tree so worktrees share one .env."""
+    try:
+        root = subprocess.check_output(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+        env_path = Path(root).parent / ".env"
+        if env_path.is_file():
+            return str(env_path)
+    except (subprocess.CalledProcessError, OSError):
+        pass
+    return ".env"
 
 logger.remove()
 logger.add(
@@ -31,7 +48,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_find_env_file(),
         env_file_encoding="utf-8",
         extra="ignore",
     )
