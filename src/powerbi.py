@@ -232,21 +232,35 @@ class PowerBIClient:
             "Content-Type": "application/json",
         }
 
+    async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        """Execute an HTTP request with 429 retry handling."""
+        client = await self._get_client()
+        headers = await self._get_headers()
+        kwargs.setdefault("headers", headers)
+
+        max_retries = 3
+        for attempt in range(max_retries + 1):
+            resp = await client.request(method, url, **kwargs)
+            if resp.status_code != 429 or attempt == max_retries:
+                return resp
+            retry_after = int(resp.headers.get("Retry-After", str(2**attempt)))
+            logger.warning(
+                "Rate limited (429). Retry-After: {}s. Attempt {}/{}",
+                retry_after, attempt + 1, max_retries,
+            )
+            await asyncio.sleep(retry_after)
+        return resp  # unreachable, satisfies type checker
+
     async def _resolve_workspace_id(self, dataset_id: str) -> str:
         """Find the workspace ID for a dataset via the Power BI REST API."""
-        headers = await self._get_headers()
-        client = await self._get_client()
-
-        # Search across all workspaces the SP has access to
-        resp = await client.get(f"{BASE_URL}/groups", headers=headers)
+        resp = await self._request("GET", f"{BASE_URL}/groups")
         if resp.status_code != 200:
             raise RuntimeError(f"Failed to list workspaces: {resp.status_code} {resp.text[:200]}")
 
         for group in resp.json().get("value", []):
             group_id = group["id"]
-            ds_resp = await client.get(
-                f"{BASE_URL}/groups/{group_id}/datasets/{dataset_id}",
-                headers=headers,
+            ds_resp = await self._request(
+                "GET", f"{BASE_URL}/groups/{group_id}/datasets/{dataset_id}",
             )
             if ds_resp.status_code == 200:
                 logger.debug("Dataset '{}' found in workspace '{}'", dataset_id, group_id)
@@ -261,11 +275,8 @@ class PowerBIClient:
         self, workspace_id: str, dataset_id: str
     ) -> list[dict[str, str]]:
         """Fetch TMDL definition via the Fabric getDefinition API (async polling)."""
-        headers = await self._get_headers()
-        client = await self._get_client()
-
         url = f"{FABRIC_URL}/workspaces/{workspace_id}/semanticModels/{dataset_id}/getDefinition"
-        resp = await client.post(url, headers=headers)
+        resp = await self._request("POST", url)
 
         if resp.status_code == 200:
             return resp.json().get("definition", {}).get("parts", [])
@@ -277,12 +288,12 @@ class PowerBIClient:
 
             for _ in range(12):  # Max ~60s of polling
                 await asyncio.sleep(retry_after)
-                status_resp = await client.get(operation_url, headers=headers)
+                status_resp = await self._request("GET", operation_url)
                 if status_resp.status_code != 200:
                     continue
                 status = status_resp.json().get("status", "")
                 if status == "Succeeded":
-                    result_resp = await client.get(result_url, headers=headers)
+                    result_resp = await self._request("GET", result_url)
                     if result_resp.status_code == 200:
                         return result_resp.json().get("definition", {}).get("parts", [])
                     raise RuntimeError(f"Failed to fetch definition result: {result_resp.status_code}")
@@ -340,11 +351,8 @@ class PowerBIClient:
             "serializerSettings": {"includeNulls": True},
         }
 
-        headers = await self._get_headers()
-        client = await self._get_client()
-
         logger.debug("POST {} | query: {}", url, query[:100])
-        resp = await client.post(url, json=body, headers=headers)
+        resp = await self._request("POST", url, json=body)
 
         if resp.status_code == 401:
             raise RuntimeError("Authentication failed. Check TENANT_ID, CLIENT_ID, CLIENT_SECRET.")
@@ -397,6 +405,112 @@ class PowerBIClient:
             "rows": clean_rows,
             "row_count": len(clean_rows),
         }
+
+
+    async def list_workspaces(self) -> dict[str, Any]:
+        """List all Power BI workspaces accessible to the service principal."""
+        logger.info("Listing workspaces")
+        resp = await self._request("GET", f"{BASE_URL}/groups")
+        if resp.status_code != 200:
+            raise RuntimeError(f"Failed to list workspaces: {resp.status_code} {resp.text[:200]}")
+
+        workspaces = [
+            {
+                "id": g["id"],
+                "name": g.get("name", ""),
+                "type": g.get("type", ""),
+                "state": g.get("state", ""),
+            }
+            for g in resp.json().get("value", [])
+        ]
+        logger.info("Found {} workspaces", len(workspaces))
+        return {"workspaces": workspaces, "count": len(workspaces)}
+
+    async def list_datasets(self, workspace_id: str | None = None) -> dict[str, Any]:
+        """List datasets in a workspace, or across all workspaces when omitted."""
+        if workspace_id:
+            logger.info("Listing datasets in workspace '{}'", workspace_id)
+            resp = await self._request("GET", f"{BASE_URL}/groups/{workspace_id}/datasets")
+
+            if resp.status_code == 404:
+                raise RuntimeError(f"Workspace '{workspace_id}' not found.")
+            if resp.status_code != 200:
+                raise RuntimeError(f"Failed to list datasets: {resp.status_code} {resp.text[:200]}")
+
+            datasets = [
+                {
+                    "id": d["id"],
+                    "name": d.get("name", ""),
+                    "configured_by": d.get("configuredBy", ""),
+                    "is_refreshable": d.get("isRefreshable", False),
+                }
+                for d in resp.json().get("value", [])
+            ]
+            logger.info("Found {} datasets", len(datasets))
+            return {"workspace_id": workspace_id, "datasets": datasets, "count": len(datasets)}
+
+        logger.info("Listing datasets across all workspaces")
+        ws_result = await self.list_workspaces()
+        datasets: list[dict[str, Any]] = []
+        for ws in ws_result["workspaces"]:
+            resp = await self._request("GET", f"{BASE_URL}/groups/{ws['id']}/datasets")
+            if resp.status_code != 200:
+                continue
+            for d in resp.json().get("value", []):
+                datasets.append({
+                    "id": d["id"],
+                    "name": d.get("name", ""),
+                    "workspace_id": ws["id"],
+                    "workspace_name": ws["name"],
+                    "configured_by": d.get("configuredBy", ""),
+                    "is_refreshable": d.get("isRefreshable", False),
+                })
+        logger.info("Found {} datasets across {} workspaces", len(datasets), ws_result["count"])
+        return {"datasets": datasets, "count": len(datasets)}
+
+    async def list_reports(self, workspace_id: str | None = None) -> dict[str, Any]:
+        """List reports in a workspace, or across all workspaces when omitted."""
+        if workspace_id:
+            logger.info("Listing reports in workspace '{}'", workspace_id)
+            resp = await self._request("GET", f"{BASE_URL}/groups/{workspace_id}/reports")
+
+            if resp.status_code == 404:
+                raise RuntimeError(f"Workspace '{workspace_id}' not found.")
+            if resp.status_code != 200:
+                raise RuntimeError(f"Failed to list reports: {resp.status_code} {resp.text[:200]}")
+
+            reports = [
+                {
+                    "id": r["id"],
+                    "name": r.get("name", ""),
+                    "dataset_id": r.get("datasetId", ""),
+                    "report_type": r.get("reportType", ""),
+                    "web_url": r.get("webUrl", ""),
+                }
+                for r in resp.json().get("value", [])
+            ]
+            logger.info("Found {} reports", len(reports))
+            return {"workspace_id": workspace_id, "reports": reports, "count": len(reports)}
+
+        logger.info("Listing reports across all workspaces")
+        ws_result = await self.list_workspaces()
+        reports: list[dict[str, Any]] = []
+        for ws in ws_result["workspaces"]:
+            resp = await self._request("GET", f"{BASE_URL}/groups/{ws['id']}/reports")
+            if resp.status_code != 200:
+                continue
+            for r in resp.json().get("value", []):
+                reports.append({
+                    "id": r["id"],
+                    "name": r.get("name", ""),
+                    "workspace_id": ws["id"],
+                    "workspace_name": ws["name"],
+                    "dataset_id": r.get("datasetId", ""),
+                    "report_type": r.get("reportType", ""),
+                    "web_url": r.get("webUrl", ""),
+                })
+        logger.info("Found {} reports across {} workspaces", len(reports), ws_result["count"])
+        return {"reports": reports, "count": len(reports)}
 
 
 powerbi_client = PowerBIClient()
