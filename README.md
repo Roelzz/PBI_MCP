@@ -199,7 +199,15 @@ Requires the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azu
    - Application: `Dataset.Read.All` (required), `Workspace.Read.All`, `Report.Read.All` (optional)
    - Delegated: `Dataset.Read.All` (required for OBO)
    - Delegated: `SemanticModel.ReadWrite.All` (required for OBO — the Fabric `getDefinition` API is classified as a write operation even though it only reads schema data)
-5. **Grant admin consent**
+5. **Grant admin consent** — both admin consent and explicit scope grant:
+   ```bash
+   az ad app permission admin-consent --id <your-client-id>
+
+   # Explicit scope grant (required for OBO — ensures Azure AD includes all scopes in the token)
+   az ad app permission grant --id <your-client-id> \
+     --api 00000009-0000-0000-c000-000000000000 \
+     --scope "Dataset.Read.All Report.Read.All Workspace.Read.All SemanticModel.ReadWrite.All"
+   ```
 6. In **Power BI Admin Portal** → Tenant settings → Developer settings:
    - Enable **"Service principals can call Fabric public APIs"**
 7. Under **Expose an API**:
