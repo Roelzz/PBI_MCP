@@ -99,10 +99,6 @@ az ad app credential reset --id "$APP_ID" --cert @"$CERT_DIR/cert.pem" --append 
 rm -f "$CERT_DIR/private.key"
 echo "Certificate created: cert.pfx (keep this secure)"
 
-# --- Also create Client Secret (fallback) ---
-echo "Generating Client Secret as fallback (1 year expiry)..."
-CLIENT_SECRET=$(az ad app credential reset --id "$APP_ID" --append --display-name "MCP Server Secret" --years 1 --query "password" -o tsv)
-
 # --- Add Application Permissions (for client credentials fallback) ---
 echo ""
 echo "Adding application permissions..."
@@ -156,7 +152,6 @@ fi
 
 update_env_value "TENANT_ID" "$TENANT_ID" "$ENV_FILE"
 update_env_value "CLIENT_ID" "$APP_ID" "$ENV_FILE"
-update_env_value "CLIENT_SECRET" "$CLIENT_SECRET" "$ENV_FILE"
 update_env_value "CLIENT_CERT_PATH" "$CERT_DIR/cert.pfx" "$ENV_FILE"
 update_env_value "AUTH_MODE" "none" "$ENV_FILE"
 echo ".env updated with credentials."
@@ -167,7 +162,6 @@ echo "Setup complete!"
 echo "======================================="
 echo "TENANT_ID=$TENANT_ID"
 echo "CLIENT_ID=$APP_ID"
-echo "CLIENT_SECRET=****${CLIENT_SECRET: -4}"
 echo "CLIENT_CERT_PATH=$CERT_DIR/cert.pfx"
 echo "API Scope: api://$APP_ID/access_as_user"
 echo "======================================="
@@ -175,7 +169,7 @@ echo ""
 echo "AUTH MODES:"
 echo ""
 echo "  AUTH_MODE=none (default):"
-echo "    Uses client credentials (cert or secret) to access Power BI."
+echo "    Uses certificate credentials to access Power BI."
 echo "    No authentication on the MCP endpoint."
 echo ""
 echo "  AUTH_MODE=obo:"

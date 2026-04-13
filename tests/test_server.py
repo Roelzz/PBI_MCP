@@ -482,7 +482,6 @@ def test_credential_selection_cert(tmp_path) -> None:
     with patch.dict(os.environ, {
         "TENANT_ID": "t", "CLIENT_ID": "c",
         "CLIENT_CERT_PATH": str(pfx), "CLIENT_CERT_PASSPHRASE": "secret",
-        "CLIENT_SECRET": "should-be-ignored",
     }):
         from src.config import Settings
         s = Settings()
@@ -492,26 +491,15 @@ def test_credential_selection_cert(tmp_path) -> None:
         assert cred["passphrase"] == "secret"
 
 
-def test_credential_selection_secret() -> None:
-    """CLIENT_SECRET used when no cert path."""
+def test_credential_selection_no_cert() -> None:
+    """Raises ValueError when CLIENT_CERT_PATH is not set."""
     with patch.dict(os.environ, {
         "TENANT_ID": "t", "CLIENT_ID": "c",
-        "CLIENT_SECRET": "my-secret", "CLIENT_CERT_PATH": "",
+        "CLIENT_CERT_PATH": "",
     }):
         from src.config import Settings
         s = Settings()
-        assert s.client_credential == "my-secret"
-
-
-def test_credential_selection_none() -> None:
-    """Raises ValueError when neither cert nor secret is set."""
-    with patch.dict(os.environ, {
-        "TENANT_ID": "t", "CLIENT_ID": "c",
-        "CLIENT_SECRET": "", "CLIENT_CERT_PATH": "",
-    }):
-        from src.config import Settings
-        s = Settings()
-        with pytest.raises(ValueError, match="CLIENT_CERT_PATH or CLIENT_SECRET"):
+        with pytest.raises(ValueError, match="CLIENT_CERT_PATH must be set"):
             _ = s.client_credential
 
 

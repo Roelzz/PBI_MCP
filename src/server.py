@@ -17,21 +17,39 @@ def _create_auth():
     if not settings.MCP_BASE_URL:
         raise ValueError("MCP_BASE_URL is required when AUTH_MODE=obo")
 
-    from fastmcp.server.auth import RemoteAuthProvider
+    from fastmcp.server.auth import MultiAuth, RemoteAuthProvider
     from fastmcp.server.auth.providers.azure import AzureJWTVerifier
+    from fastmcp.server.auth.providers.jwt import JWTVerifier
 
-    verifier = AzureJWTVerifier(
-        client_id=settings.CLIENT_ID,
-        tenant_id=settings.TENANT_ID,
+    tid = settings.TENANT_ID
+    cid = settings.CLIENT_ID
+    audience = [cid, f"api://{cid}"]
+
+    # v2.0 verifier (Copilot Studio, modern clients)
+    v2_verifier = AzureJWTVerifier(
+        client_id=cid,
+        tenant_id=tid,
         required_scopes=["access_as_user"],
     )
-    return RemoteAuthProvider(
-        token_verifier=verifier,
+
+    # v1.0 verifier (Azure CLI, legacy clients issue v1.0 tokens)
+    v1_verifier = JWTVerifier(
+        jwks_uri=f"https://login.microsoftonline.com/{tid}/discovery/v2.0/keys",
+        issuer=f"https://sts.windows.net/{tid}/",
+        audience=audience,
+        algorithm="RS256",
+        required_scopes=["access_as_user"],
+    )
+
+    # RemoteAuthProvider handles routes + v2 validation, MultiAuth adds v1 fallback
+    v2_remote = RemoteAuthProvider(
+        token_verifier=v2_verifier,
         authorization_servers=[
-            AnyHttpUrl(f"https://login.microsoftonline.com/{settings.TENANT_ID}/v2.0"),
+            AnyHttpUrl(f"https://login.microsoftonline.com/{tid}/v2.0"),
         ],
         base_url=settings.MCP_BASE_URL,
     )
+    return MultiAuth(server=v2_remote, verifiers=[v1_verifier])
 
 
 mcp = FastMCP("Power BI - Semantic Model Query Server", auth=_create_auth())

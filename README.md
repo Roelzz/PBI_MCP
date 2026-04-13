@@ -134,7 +134,7 @@ The server supports two authentication modes, controlled by `AUTH_MODE` in `.env
 
 ### `AUTH_MODE=none` (default)
 
-No authentication on the MCP endpoint. The server uses the service principal's own credentials (certificate or client secret) to access Power BI. Suitable for local development and trusted networks.
+No authentication on the MCP endpoint. The server uses the service principal's certificate to access Power BI. Suitable for local development and trusted networks.
 
 ### `AUTH_MODE=obo` (recommended for production)
 
@@ -142,7 +142,7 @@ The MCP endpoint requires a valid Azure AD bearer token. The server validates th
 
 - Every MCP request must include an `Authorization: Bearer <token>` header
 - Power BI access is scoped to the calling user (respects Row-Level Security)
-- The service principal still needs a credential (certificate or secret) for the OBO exchange
+- The service principal still needs a certificate for the OBO exchange
 
 Required settings for OBO mode:
 ```
@@ -150,17 +150,16 @@ AUTH_MODE=obo
 MCP_BASE_URL=https://your-mcp-server.example.com
 ```
 
-### Certificate vs Client Secret
+### Certificate Auth
 
-The server supports both. Certificate is preferred (harder to leak, can't be copy-pasted):
+The server authenticates to Azure AD using a PFX certificate — no client secrets.
 
 | Setting | Description |
 |---|---|
-| `CLIENT_CERT_PATH` | Path to PFX certificate file (preferred) |
+| `CLIENT_CERT_PATH` | Path to PFX certificate file (required) |
 | `CLIENT_CERT_PASSPHRASE` | Optional PFX passphrase |
-| `CLIENT_SECRET` | Client secret string (fallback) |
 
-If both are set, the certificate is used.
+Run `./setup_azure_auth.sh` to generate the certificate and configure the app registration.
 
 ### Testing OBO locally
 
@@ -189,8 +188,7 @@ All settings via environment variables (`.env`):
 |---|---|---|
 | `TENANT_ID` | — | Azure AD tenant ID |
 | `CLIENT_ID` | — | Azure AD app (client) ID |
-| `CLIENT_SECRET` | — | Azure AD client secret (fallback) |
-| `CLIENT_CERT_PATH` | — | Path to PFX certificate (preferred) |
+| `CLIENT_CERT_PATH` | — | Path to PFX certificate (required) |
 | `CLIENT_CERT_PASSPHRASE` | — | PFX passphrase (optional) |
 | `AUTH_MODE` | `none` | Auth mode: `none` or `obo` |
 | `MCP_BASE_URL` | — | Server public URL (required for OBO) |

@@ -43,9 +43,8 @@ class Settings(BaseSettings):
     # Azure AD (Service Principal)
     TENANT_ID: str = ""
     CLIENT_ID: str = ""
-    CLIENT_SECRET: str = ""
 
-    # Certificate auth (preferred over client secret)
+    # Certificate auth (required)
     CLIENT_CERT_PATH: str = ""
     CLIENT_CERT_PASSPHRASE: str = ""
 
@@ -61,18 +60,14 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
 
     @property
-    def client_credential(self) -> str | dict[str, str]:
-        """Return MSAL client credential: certificate dict or secret string."""
-        if self.CLIENT_CERT_PATH:
-            cred: dict[str, str] = {"private_key_pfx_path": self.CLIENT_CERT_PATH}
-            if self.CLIENT_CERT_PASSPHRASE:
-                cred["passphrase"] = self.CLIENT_CERT_PASSPHRASE
-            return cred
-        if self.CLIENT_SECRET:
-            return self.CLIENT_SECRET
-        raise ValueError(
-            "Either CLIENT_CERT_PATH or CLIENT_SECRET must be set."
-        )
+    def client_credential(self) -> dict[str, str]:
+        """Return MSAL client credential: certificate dict."""
+        if not self.CLIENT_CERT_PATH:
+            raise ValueError("CLIENT_CERT_PATH must be set.")
+        cred: dict[str, str] = {"private_key_pfx_path": self.CLIENT_CERT_PATH}
+        if self.CLIENT_CERT_PASSPHRASE:
+            cred["passphrase"] = self.CLIENT_CERT_PASSPHRASE
+        return cred
 
     model_config = SettingsConfigDict(
         env_file=_find_env_file(),
