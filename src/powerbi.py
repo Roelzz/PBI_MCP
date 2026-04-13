@@ -305,25 +305,75 @@ class PowerBIClient:
 
         if resp.status_code == 403:
             logger.error("Fabric getDefinition 403 response: {}", resp.text[:500])
-            raise RuntimeError(
+            raise PermissionError(
                 f"Access denied for semantic model '{dataset_id}'. "
-                f"Fabric API response: {resp.text[:300]}"
+                "Insufficient Fabric API scopes or permissions."
             )
         if resp.status_code == 404:
             raise RuntimeError(f"Semantic model '{dataset_id}' not found in workspace '{workspace_id}'.")
 
-        raise RuntimeError(f"getDefinition failed: {resp.status_code} {resp.text[:200]}")
+        logger.error("getDefinition failed: {} {}", resp.status_code, resp.text[:200])
+        raise RuntimeError(f"Schema retrieval failed (HTTP {resp.status_code}).")
+
+    async def _get_schema_via_rest_api(
+        self, workspace_id: str, dataset_id: str,
+    ) -> dict[str, Any]:
+        """Fallback: get basic schema (tables + columns) via Power BI REST API.
+
+        Does NOT include measures, DAX expressions, or relationships.
+        Only requires Dataset.Read.All (no Fabric permissions needed).
+        """
+        logger.info("Falling back to Power BI REST API for schema (tables + columns only)")
+        url = f"{BASE_URL}/groups/{workspace_id}/datasets/{dataset_id}/tables"
+        resp = await self._request("GET", url)
+
+        if resp.status_code != 200:
+            logger.error("REST API tables failed: {} {}", resp.status_code, resp.text[:200])
+            raise RuntimeError(f"Failed to retrieve tables for dataset '{dataset_id}'.")
+
+        tables: list[dict[str, Any]] = []
+        for t in resp.json().get("value", []):
+            table_name = t.get("name", "")
+            columns: list[dict[str, str]] = [
+                {
+                    "name": c.get("name", ""),
+                    "data_type": c.get("dataType", ""),
+                    "is_hidden": c.get("isHidden", False),
+                }
+                for c in t.get("columns", [])
+            ]
+            tables.append({
+                "name": table_name,
+                "is_hidden": t.get("isHidden", False),
+                "columns": columns,
+                "measures": [],
+            })
+
+        logger.info("REST API schema: {} tables, {} columns (no measures/relationships)",
+                     len(tables), sum(len(t["columns"]) for t in tables))
+        return {
+            "dataset_id": dataset_id,
+            "workspace_id": workspace_id,
+            "source": "rest_api",
+            "tables": tables,
+            "relationships": [],
+            "note": "Partial schema via REST API (tables + columns only). Measures, DAX expressions, and relationships require Fabric API permissions (SemanticModel.ReadWrite.All).",
+        }
 
     async def get_semantic_model_schema(
         self, dataset_id: str, workspace_id: str | None = None,
     ) -> dict[str, Any]:
-        """Retrieve full schema via Fabric getDefinition API: tables, columns, measures, relationships."""
+        """Retrieve schema — tries Fabric TMDL first, falls back to REST API."""
         logger.info("Fetching schema for dataset '{}'", dataset_id)
 
         if not workspace_id:
             workspace_id = await self._resolve_workspace_id(dataset_id)
 
-        parts = await self._get_definition_parts(workspace_id, dataset_id)
+        try:
+            parts = await self._get_definition_parts(workspace_id, dataset_id)
+        except PermissionError:
+            return await self._get_schema_via_rest_api(workspace_id, dataset_id)
+
         tables = _parse_tmdl_tables(parts)
         relationships = _parse_tmdl_relationships(parts)
 
@@ -338,6 +388,7 @@ class PowerBIClient:
         return {
             "dataset_id": dataset_id,
             "workspace_id": workspace_id,
+            "source": "fabric_tmdl",
             "tables": tables,
             "relationships": relationships,
         }
@@ -356,11 +407,12 @@ class PowerBIClient:
         resp = await self._request("POST", url, json=body)
 
         if resp.status_code == 401:
-            raise RuntimeError("Authentication failed. Check TENANT_ID, CLIENT_ID, CLIENT_SECRET.")
+            raise RuntimeError("Authentication failed. Check credentials and token configuration.")
         if resp.status_code == 403:
+            logger.error("DAX executeQueries 403 response: {}", resp.text[:500])
             raise RuntimeError(
                 f"Access denied for dataset '{dataset_id}'. "
-                "Ensure the service principal has Build permissions and the dataset is in Premium/PPU/Embedded capacity."
+                "Ensure the user has Build permissions and the dataset is on Premium/PPU/Embedded/Fabric capacity."
             )
         if resp.status_code == 404:
             raise RuntimeError(f"Dataset '{dataset_id}' not found.")

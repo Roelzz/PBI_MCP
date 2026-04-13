@@ -472,6 +472,67 @@ async def test_mcp_tool_list_reports_error() -> None:
     assert result["error"] == "forbidden"
 
 
+# --- Schema fallback tests ---
+
+
+async def test_schema_fallback_to_rest_api(powerbi_client: PowerBIClient) -> None:
+    """Falls back to REST API when Fabric getDefinition returns 403."""
+    # Mock getDefinition 403 response
+    resp_403 = MagicMock()
+    resp_403.status_code = 403
+    resp_403.text = '{"errorCode":"InsufficientScopes"}'
+
+    # Mock REST API tables response
+    resp_tables = MagicMock()
+    resp_tables.status_code = 200
+    resp_tables.json.return_value = {
+        "value": [
+            {
+                "name": "Sales",
+                "isHidden": False,
+                "columns": [
+                    {"name": "Amount", "dataType": "Double", "isHidden": False},
+                    {"name": "Date", "dataType": "DateTime", "isHidden": False},
+                ],
+            }
+        ]
+    }
+
+    call_count = 0
+
+    async def mock_request(method, url, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if "getDefinition" in url:
+            return resp_403
+        if "/tables" in url:
+            return resp_tables
+        # For _resolve_workspace_id
+        return MagicMock(status_code=404)
+
+    with patch.object(powerbi_client, "_request", side_effect=mock_request):
+        result = await powerbi_client.get_semantic_model_schema("ds-1", "ws-1")
+
+    assert result["source"] == "rest_api"
+    assert result["tables"][0]["name"] == "Sales"
+    assert len(result["tables"][0]["columns"]) == 2
+    assert result["tables"][0]["measures"] == []
+    assert result["relationships"] == []
+    assert "note" in result
+
+
+async def test_schema_tmdl_includes_source(powerbi_client: PowerBIClient) -> None:
+    """TMDL schema includes source field."""
+    resp_200 = MagicMock()
+    resp_200.status_code = 200
+    resp_200.json.return_value = {"definition": {"parts": []}}
+
+    with patch.object(powerbi_client, "_request", return_value=resp_200):
+        result = await powerbi_client.get_semantic_model_schema("ds-1", "ws-1")
+
+    assert result["source"] == "fabric_tmdl"
+
+
 # --- Auth: credential selection tests ---
 
 

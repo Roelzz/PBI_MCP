@@ -65,7 +65,7 @@ def _apply_user_assertion() -> None:
 
         token = get_access_token()
         if token:
-            logger.info("OBO: user assertion set (token present)")
+            logger.debug("OBO: user assertion set")
         else:
             logger.warning("OBO: no access token in request context, falling back to client credentials")
         set_user_assertion(token.token if token else None)
