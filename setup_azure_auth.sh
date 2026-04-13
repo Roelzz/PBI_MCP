@@ -8,12 +8,11 @@ set -e
 
 # --- Configuration ---
 POWERBI_RESOURCE_APP_ID="00000009-0000-0000-c000-000000000000"
-# Application permissions (Role)
-PERM_DATASET_READ_ALL_APP="7f33e027-4039-419b-938e-2f8ca153e68e"
-PERM_WORKSPACE_READ_ALL_APP="b2f1b2fa-f35c-407c-979c-a858a808ba85"
-PERM_REPORT_READ_ALL_APP="4ae1bf56-f562-4747-b7bc-2fa0874ed46f"
-# Delegated permissions (Scope) — same names, different GUIDs
-PERM_DATASET_READ_ALL_DEL="322b68b2-0804-416e-86a5-d772c567f6be"
+# Delegated permissions (Scope) — least privilege for OBO
+PERM_DATASET_READ_ALL="322b68b2-0804-416e-86a5-d772c567f6be"
+PERM_WORKSPACE_READ_ALL="47df08d4-1c52-4b89-89ee-980e926801d7"
+PERM_REPORT_READ_ALL="4ae1bf56-f562-4747-b7bc-2fa0874ed46f"
+PERM_SEMANTIC_MODEL_READWRITE_ALL="8ebba963-9494-4133-907f-f29e6a1a44a3"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/.env"
@@ -99,22 +98,19 @@ az ad app credential reset --id "$APP_ID" --cert @"$CERT_DIR/cert.pem" --append 
 rm -f "$CERT_DIR/private.key"
 echo "Certificate created: cert.pfx (keep this secure)"
 
-# --- Add Application Permissions (for client credentials fallback) ---
+# --- Add Delegated Permissions (least privilege for OBO) ---
 echo ""
-echo "Adding application permissions..."
-az ad app permission add --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" --api-permissions "$PERM_DATASET_READ_ALL_APP=Role" >/dev/null
-echo "  Dataset.Read.All (Application)"
-az ad app permission add --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" --api-permissions "$PERM_WORKSPACE_READ_ALL_APP=Role" >/dev/null
-echo "  Workspace.Read.All (Application)"
-az ad app permission add --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" --api-permissions "$PERM_REPORT_READ_ALL_APP=Role" >/dev/null
-echo "  Report.Read.All (Application)"
+echo "Adding delegated permissions..."
+az ad app permission add --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" --api-permissions "$PERM_DATASET_READ_ALL=Scope" >/dev/null
+echo "  Dataset.Read.All (Delegated) — list/get datasets, execute DAX"
+az ad app permission add --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" --api-permissions "$PERM_WORKSPACE_READ_ALL=Scope" >/dev/null
+echo "  Workspace.Read.All (Delegated) — list workspaces"
+az ad app permission add --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" --api-permissions "$PERM_REPORT_READ_ALL=Scope" >/dev/null
+echo "  Report.Read.All (Delegated) — list reports"
+az ad app permission add --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" --api-permissions "$PERM_SEMANTIC_MODEL_READWRITE_ALL=Scope" >/dev/null
+echo "  SemanticModel.ReadWrite.All (Delegated) — get schema (no read-only alternative exists)"
 
-# --- Add Delegated Permission (for OBO) ---
-echo "Adding delegated permissions (for OBO)..."
-az ad app permission add --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" --api-permissions "$PERM_DATASET_READ_ALL_DEL=Scope" >/dev/null
-echo "  Dataset.Read.All (Delegated)"
-
-# --- Grant Admin Consent ---
+# --- Grant Admin Consent + Explicit Scope Grant ---
 echo ""
 echo "Attempting to grant Admin Consent..."
 if az ad app permission admin-consent --id "$APP_ID" 2>/dev/null; then
@@ -125,6 +121,11 @@ else
     echo "  Go to: Azure Portal > App Registrations > $APP_NAME > API Permissions"
     echo "  Click 'Grant admin consent for [Your Org]'"
 fi
+
+echo "Granting explicit scope consent..."
+az ad app permission grant --id "$APP_ID" --api "$POWERBI_RESOURCE_APP_ID" \
+    --scope "Dataset.Read.All Workspace.Read.All Report.Read.All SemanticModel.ReadWrite.All" >/dev/null 2>&1 || true
+echo "Scope grant applied."
 
 # --- Expose API Scope (for OBO) ---
 echo ""

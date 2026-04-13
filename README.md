@@ -195,31 +195,39 @@ Requires the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azu
    ```bash
    az ad app credential reset --id <your-client-id> --cert @cert.pem --append
    ```
-4. Under **API Permissions**, add **Power BI Service**:
-   - Application: `Dataset.Read.All` (required), `Workspace.Read.All`, `Report.Read.All` (optional)
-   - Delegated: `Dataset.Read.All` (required for OBO)
-   - Delegated: `SemanticModel.ReadWrite.All` (required for OBO — the Fabric `getDefinition` API is classified as a write operation even though it only reads schema data)
-5. **Grant admin consent** — both admin consent and explicit scope grant:
+4. Under **API Permissions**, add **Power BI Service** (delegated permissions only — least privilege for OBO):
+
+   | Permission | Type | Required for |
+   |---|---|---|
+   | `Dataset.Read.All` | Delegated | list/get datasets, execute DAX queries |
+   | `Workspace.Read.All` | Delegated | list workspaces |
+   | `Report.Read.All` | Delegated | list reports |
+   | `SemanticModel.ReadWrite.All` | Delegated | get schema via Fabric `getDefinition` API |
+
+   > **Why ReadWrite for schema?** `SemanticModel.Read.All` does not exist. Microsoft classifies `getDefinition` as a write operation (it creates an async job) even though it only reads schema data. This is the minimum — there is no read-only alternative.
+
+   > **No application permissions needed.** OBO mode uses delegated permissions exclusively. The user's own Power BI access determines what they can see.
+
+5. **Grant admin consent and explicit scope grant**:
    ```bash
    az ad app permission admin-consent --id <your-client-id>
 
-   # Explicit scope grant (required for OBO — ensures Azure AD includes all scopes in the token)
+   # Explicit scope grant (required — ensures Azure AD includes all scopes in the OBO token)
    az ad app permission grant --id <your-client-id> \
      --api 00000009-0000-0000-c000-000000000000 \
      --scope "Dataset.Read.All Report.Read.All Workspace.Read.All SemanticModel.ReadWrite.All"
    ```
 6. In **Power BI Admin Portal** → Tenant settings → Developer settings:
+   - Enable **"Allow service principals to use Power BI APIs"**
    - Enable **"Service principals can call Fabric public APIs"**
 7. Under **Expose an API**:
    - Set Application ID URI to `api://<your-client-id>`
    - Add scope `access_as_user` (type: User)
 8. In the app **Manifest**, set `requestedAccessTokenVersion: 2`
-9. In **Power BI Admin Portal** → Tenant settings → Developer settings:
-   Enable **"Allow service principals to use Power BI APIs"**
-10. In your **Power BI workspace** → Settings → Access:
+9. In your **Power BI workspace** → Settings → Access:
    Add the service principal as a **Member**
 
-> Steps 4 (delegated), 6-8 are only needed for `AUTH_MODE=obo`. For `AUTH_MODE=none`, only application permissions, Fabric API access, and workspace membership are required.
+> Steps 7-8 are only needed for `AUTH_MODE=obo`. For `AUTH_MODE=none`, workspace membership and the tenant settings are sufficient.
 
 ## Configuration
 
