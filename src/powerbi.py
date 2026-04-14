@@ -233,23 +233,32 @@ class PowerBIClient:
         }
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
-        """Execute an HTTP request with 429 retry handling."""
+        """Execute an HTTP request with retry handling for 429 and transient errors."""
         client = await self._get_client()
         headers = await self._get_headers()
         kwargs.setdefault("headers", headers)
 
+        retryable = (429, 502, 503, 504)
         max_retries = 3
         for attempt in range(max_retries + 1):
             resp = await client.request(method, url, **kwargs)
-            if resp.status_code != 429 or attempt == max_retries:
+            if resp.status_code not in retryable or attempt == max_retries:
                 return resp
-            retry_after = int(resp.headers.get("Retry-After", str(2**attempt)))
+            retry_after = min(
+                int(resp.headers.get("Retry-After", str(2**attempt))),
+                60,
+            )
             logger.warning(
-                "Rate limited (429). Retry-After: {}s. Attempt {}/{}",
-                retry_after, attempt + 1, max_retries,
+                "Retryable response ({}). Retry-After: {}s. Attempt {}/{}",
+                resp.status_code, retry_after, attempt + 1, max_retries,
             )
             await asyncio.sleep(retry_after)
         return resp  # unreachable, satisfies type checker
+
+    async def close(self) -> None:
+        """Close the httpx client and release connections."""
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
 
     async def _resolve_workspace_id(self, dataset_id: str) -> str:
         """Find the workspace ID for a dataset via the Power BI REST API."""
@@ -283,7 +292,9 @@ class PowerBIClient:
 
         if resp.status_code == 202:
             operation_url = resp.headers.get("location", "")
-            retry_after = int(resp.headers.get("retry-after", "5"))
+            if not operation_url:
+                raise RuntimeError("getDefinition returned 202 without a location header.")
+            retry_after = min(int(resp.headers.get("retry-after", "5")), 30)
             result_url = f"{operation_url}/result"
 
             for _ in range(12):  # Max ~60s of polling
@@ -417,8 +428,9 @@ class PowerBIClient:
         if resp.status_code == 404:
             raise RuntimeError(f"Dataset '{dataset_id}' not found.")
         if resp.status_code == 400:
-            error_detail = resp.json().get("error", {}).get("message", resp.text)
-            raise RuntimeError(f"Invalid query: {error_detail}")
+            error_detail = resp.json().get("error", {}).get("message", "")
+            logger.error("DAX query error for dataset '{}': {}", dataset_id, error_detail[:500])
+            raise RuntimeError(f"Invalid DAX query for dataset '{dataset_id}'.")
 
         resp.raise_for_status()
 
@@ -508,6 +520,7 @@ class PowerBIClient:
         for ws in ws_result["workspaces"]:
             resp = await self._request("GET", f"{BASE_URL}/groups/{ws['id']}/datasets")
             if resp.status_code != 200:
+                logger.warning("Skipping workspace '{}' ({}): HTTP {}", ws['name'], ws['id'], resp.status_code)
                 continue
             for d in resp.json().get("value", []):
                 datasets.append({
@@ -551,6 +564,7 @@ class PowerBIClient:
         for ws in ws_result["workspaces"]:
             resp = await self._request("GET", f"{BASE_URL}/groups/{ws['id']}/reports")
             if resp.status_code != 200:
+                logger.warning("Skipping workspace '{}' ({}): HTTP {}", ws['name'], ws['id'], resp.status_code)
                 continue
             for r in resp.json().get("value", []):
                 reports.append({

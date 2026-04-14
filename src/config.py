@@ -1,3 +1,4 @@
+import atexit
 import base64
 import os
 import subprocess
@@ -44,6 +45,7 @@ def _decode_cert_base64(b64: str) -> str:
     os.write(fd, data)
     os.close(fd)
     _cert_tempfile = path
+    atexit.register(lambda p=path: os.unlink(p) if os.path.exists(p) else None)
     logger.info("Decoded CLIENT_CERT_BASE64 to {}", path)
     return path
 

@@ -249,7 +249,7 @@ async def test_error_404(powerbi_client: PowerBIClient) -> None:
 
 
 async def test_error_400(powerbi_client: PowerBIClient) -> None:
-    """Invalid query raises RuntimeError with API error detail."""
+    """Invalid query raises sanitized RuntimeError (details logged, not returned)."""
     mock_resp = MagicMock()
     mock_resp.status_code = 400
     mock_resp.json.return_value = {"error": {"message": "Syntax error in DAX"}}
@@ -261,7 +261,7 @@ async def test_error_400(powerbi_client: PowerBIClient) -> None:
     powerbi_client._client = mock_client
 
     with patch("src.powerbi.token_manager.get_token", return_value="fake-token"):
-        with pytest.raises(RuntimeError, match="Syntax error in DAX"):
+        with pytest.raises(RuntimeError, match="Invalid DAX query for dataset"):
             await powerbi_client._execute_query("test-id", "INVALID DAX")
 
 
